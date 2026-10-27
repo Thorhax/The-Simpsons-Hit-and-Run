@@ -60,13 +60,13 @@ unsigned int const radMovie_NoAudioTrack = 0xFFFFFFFF;
 
 #define RAD_MOVIE_PLAYER_VIDEO_LAG 10
 
-#define AV_CHK(x) if (int error = (x) < 0) { \
+#define AV_CHK(x) { int error = (x); if (error < 0) { \
         char str[AV_ERROR_MAX_STRING_SIZE]; \
         av_strerror( error, str, AV_ERROR_MAX_STRING_SIZE ); \
         rDebugPrintf( "%s at %s:%d\n", str, __FILE__, __LINE__ ); \
         SetState( IRadMoviePlayer2::NoData ); \
         return; \
-    };
+    } };
 
 //=============================================================================
 // Static Members
@@ -202,7 +202,9 @@ void radMoviePlayer::Load( const char * pVideoFileName, unsigned int audioTrackI
     AV_CHK( avformat_find_stream_info( m_pFormatCtx, NULL ) );
 
     const AVCodec* pVideoCodec = NULL;
-    m_VideoTrackIndex = av_find_best_stream( m_pFormatCtx, AVMEDIA_TYPE_VIDEO, -1, -1, &pVideoCodec, 0 );
+    int videoTrackIndex = av_find_best_stream( m_pFormatCtx, AVMEDIA_TYPE_VIDEO, -1, -1, &pVideoCodec, 0 );
+    AV_CHK( videoTrackIndex );
+    m_VideoTrackIndex = videoTrackIndex;
     AVCodecParameters* pVideoParams = m_pFormatCtx->streams[m_VideoTrackIndex]->codecpar;
     m_pVideoCtx = avcodec_alloc_context3( pVideoCodec );
     AV_CHK( avcodec_parameters_to_context( m_pVideoCtx, pVideoParams ) );
@@ -220,10 +222,21 @@ void radMoviePlayer::Load( const char * pVideoFileName, unsigned int audioTrackI
     );
 #endif
 
+    // Some movies (e.g. the logos) have no audio track at all
+    const AVCodec* pAudioCodec = NULL;
+    int foundAudioTrack = -1;
     if( audioTrackIndex != radMovie_NoAudioTrack )
     {
-        const AVCodec* pAudioCodec = NULL;
-        m_AudioTrackIndex = av_find_best_stream( m_pFormatCtx, AVMEDIA_TYPE_AUDIO, audioTrackIndex + 1, -1, &pAudioCodec, 0 );
+        foundAudioTrack = av_find_best_stream( m_pFormatCtx, AVMEDIA_TYPE_AUDIO, audioTrackIndex + 1, -1, &pAudioCodec, 0 );
+        if( foundAudioTrack < 0 )
+        {
+            rDebugPrintf( "radMoviePlayer: No audio track %u in %s\n", audioTrackIndex, pVideoFileName );
+        }
+    }
+
+    if( foundAudioTrack > 0 )
+    {
+        m_AudioTrackIndex = foundAudioTrack;
         AVCodecParameters* pAudioParams = m_pFormatCtx->streams[m_AudioTrackIndex]->codecpar;
         m_pAudioCtx = avcodec_alloc_context3( pAudioCodec );
         AV_CHK( avcodec_parameters_to_context( m_pAudioCtx, pAudioParams ) );

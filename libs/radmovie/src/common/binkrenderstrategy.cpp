@@ -175,8 +175,19 @@ void radMovieRenderStrategyBink::ChangeParameters( unsigned int width, unsigned 
 
         // How many tiles will this movie require?
 
-        unsigned int horizontalTiles = ( width / RMV_TEXTURE_MAX_TEX_DIM ) + 1;
-        unsigned int verticalTiles = ( height / RMV_TEXTURE_MAX_TEX_DIM ) + 1;
+#ifdef RAD_MOVIEPLAYER_USE_BINK
+        unsigned int tileDimX = RMV_TEXTURE_MAX_TEX_DIM;
+        unsigned int tileDimY = RMV_TEXTURE_MAX_TEX_DIM;
+#else
+        // The FFmpeg player decodes the whole frame into a single texture, so size
+        // it to the movie instead of splitting it into fixed size tiles
+        unsigned int tileDimX = 1;
+        unsigned int tileDimY = 1;
+        while( tileDimX < width ) tileDimX <<= 1;
+        while( tileDimY < height ) tileDimY <<= 1;
+#endif
+        unsigned int horizontalTiles = ( width + tileDimX - 1 ) / tileDimX;
+        unsigned int verticalTiles = ( height + tileDimY - 1 ) / tileDimY;
         m_NumTiles = horizontalTiles * verticalTiles;
         rAssert( m_NumTiles <= RMV_MAX_NUM_TILES );
 
@@ -205,7 +216,7 @@ void radMovieRenderStrategyBink::ChangeParameters( unsigned int width, unsigned 
                 #if RAD_VITAGL
                 bool wasTextureCreated = m_pTile[ tileIndex ].m_pTexture->Create( m_MovieWidth, m_MovieHeight, RMV_TEXTURE_BITDEPTH, 0, 0, PDDI_TEXTYPE_YUV );
                 #elif RAD_WIN32
-                bool wasTextureCreated = m_pTile[ tileIndex ].m_pTexture->Create( RMV_TEXTURE_MAX_TEX_DIM, RMV_TEXTURE_MAX_TEX_DIM, RMV_TEXTURE_BITDEPTH, 8, 0, PDDI_TEXTYPE_RGB );
+                bool wasTextureCreated = m_pTile[ tileIndex ].m_pTexture->Create( tileDimX, tileDimY, RMV_TEXTURE_BITDEPTH, 8, 0, PDDI_TEXTYPE_RGB );
                 #elif RAD_XBOX
                 bool wasTextureCreated = m_pTile[ tileIndex ].m_pTexture->Create( m_MovieWidth, m_MovieHeight, RMV_TEXTURE_BITDEPTH, 0, 0, PDDI_TEXTYPE_LINEAR );
                 #elif RAD_GAMECUBE
@@ -214,25 +225,25 @@ void radMovieRenderStrategyBink::ChangeParameters( unsigned int width, unsigned 
 
                 rAssert( wasTextureCreated == true );
 
-                m_pTile[ tileIndex ].m_PosX = x * RMV_TEXTURE_MAX_TEX_DIM;
-                m_pTile[ tileIndex ].m_PosY = y * RMV_TEXTURE_MAX_TEX_DIM;
+                m_pTile[ tileIndex ].m_PosX = x * tileDimX;
+                m_pTile[ tileIndex ].m_PosY = y * tileDimY;
                 
-                if( ( x + 1 ) * RMV_TEXTURE_MAX_TEX_DIM > m_MovieWidth )
+                if( ( x + 1 ) * tileDimX > m_MovieWidth )
                 {
-                    m_pTile[ tileIndex ].m_Width = m_MovieWidth % RMV_TEXTURE_MAX_TEX_DIM;
+                    m_pTile[ tileIndex ].m_Width = m_MovieWidth - x * tileDimX;
                 }
                 else
                 {
-                    m_pTile[ tileIndex ].m_Width = RMV_TEXTURE_MAX_TEX_DIM;
+                    m_pTile[ tileIndex ].m_Width = tileDimX;
                 }
 
-                if( ( y + 1 ) * RMV_TEXTURE_MAX_TEX_DIM > m_MovieHeight )
+                if( ( y + 1 ) * tileDimY > m_MovieHeight )
                 {
-                    m_pTile[ tileIndex ].m_Height = m_MovieHeight % RMV_TEXTURE_MAX_TEX_DIM;
+                    m_pTile[ tileIndex ].m_Height = m_MovieHeight - y * tileDimY;
                 }
                 else
                 {
-                    m_pTile[ tileIndex ].m_Height = RMV_TEXTURE_MAX_TEX_DIM;
+                    m_pTile[ tileIndex ].m_Height = tileDimY;
                 }
 
                 tileIndex++;
