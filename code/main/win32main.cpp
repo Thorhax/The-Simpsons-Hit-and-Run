@@ -23,6 +23,7 @@
 
 #ifdef __SWITCH__
 #include <switch.h>
+#include <arpa/inet.h>
 #endif
 
 #ifdef RAD_VITA
@@ -73,10 +74,14 @@ static void LogOutputFunction( void *userdata, int category, SDL_LogPriority pri
 extern "C" int main( int argc, char *argv[] )
 {
 #ifdef __SWITCH__
-#ifdef RAD_DEBUG
-    socketInitializeDefault();
-    nxlinkStdio();
+    // Send the log to nxlink's stdio server when started with nxlink -s
+#ifndef RAD_DEBUG
+    if( __nxlink_host.s_addr != 0 )
 #endif
+    {
+        socketInitializeDefault();
+        nxlinkStdio();
+    }
     romfsInit();
 #endif
 #ifdef RAD_VITA
