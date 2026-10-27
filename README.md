@@ -24,7 +24,7 @@ docker run --rm -v $PWD:/src -w /src devkitpro/devkita64:latest bash -c '\
   cmake --build build-switch -j$(nproc)'
 ```
 
-Pass `-DSRR2_REGION=PAL` for the multi-language version. To embed the frontend assets in the `.nro`, place them in a `romfs` folder at the root of the repository before configuring.
+Pass `-DSRR2_REGION=PAL` for the multi-language version. The frontend assets are embedded in the `.nro`, so before configuring copy the game's `art/frontend/scrooby` folder to `romfs/art/frontend/scrooby` at the root of the repository. The build will refuse to configure without it, since the game crashes on boot when they are missing.
 
 # Multi-Language support
 

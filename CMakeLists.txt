@@ -187,17 +187,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
 		AUTHOR "Radical Entertainment"
 		VERSION ${SRR2_VERSION}
 	)
-	# The romfs folder holds the frontend assets copied from the PC release
-	if(EXISTS "${CMAKE_SOURCE_DIR}/romfs")
-		set(SRR2_ROMFS ROMFS romfs)
-	else()
-		message(WARNING "No romfs folder found, the frontend assets will not be embedded in the NRO")
+	# The frontend assets are loaded from ROMFS:\art\frontend\scrooby, the game crashes on boot without them
+	if(NOT EXISTS "${CMAKE_SOURCE_DIR}/romfs/art/frontend/scrooby/bootup.p3d")
+		message(FATAL_ERROR "Copy the art/frontend/scrooby folder of the game into romfs/art/frontend/scrooby")
 	endif()
 	nx_create_nro(${PROJECT_NAME}_nro
 		TARGET ${PROJECT_NAME}
 		OUTPUT ${SRR2_FILENAME}${SRR2_REGION}.nro
 		ICON ${PROJECT_NAME}.jpg
 		NACP ${PROJECT_NAME}.nacp
-		${SRR2_ROMFS}
+		ROMFS romfs
 	)
 endif()
