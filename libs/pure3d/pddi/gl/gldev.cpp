@@ -113,7 +113,7 @@ int pglDevice::GetDisplayInfo(pddiDisplayInfo** info)
 #if SDL_MAJOR_VERSION < 3
         for(int j = 0; j < totalModes; j++)
         {
-            if(SDL_GetDisplayMode(j, j, &devMode) == 0)
+            if(SDL_GetDisplayMode(i, j, &devMode) == 0)
             {
                 displayModes[nModes].width = devMode.w;
                 displayModes[nModes].height = devMode.h;
