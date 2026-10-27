@@ -284,84 +284,65 @@ void pglMat::SetDevPass(unsigned pass)
     MICROPROFILE_SCOPEI( "PDDI", "pglMat::SetDevPass", MP_RED );
 
     int i = 0;
+    pglStateCache& cache = context->stateCache;
 
     if(texEnv[i].texture)
     {
         texEnv[i].texture->SetGLState();
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filterMagTable[texEnv[i].filterMode]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filterMinTable[texEnv[i].filterMode]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, uvTable[texEnv[i].uvMode]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, uvTable[texEnv[i].uvMode]);
-        glTexEnvi(GL_TEXTURE_ENV,GL_TEXTURE_ENV_MODE,GL_MODULATE);
+        texEnv[i].texture->SetSampler(filterMagTable[texEnv[i].filterMode],
+                                      filterMinTable[texEnv[i].filterMode],
+                                      uvTable[texEnv[i].uvMode]);
+        cache.TexEnvMode(GL_MODULATE);
     }
     else
     {
-        glDisable(GL_TEXTURE_2D);
+        cache.Enable(pglStateCache::CAP_TEXTURE_2D, false);
         glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     }
 
     if(texEnv[i].alphaTest)
     {
-        glEnable(GL_ALPHA_TEST);
-        glAlphaFunc(alphaCompareTable[texEnv[i].alphaCompareMode],texEnv[i].alphaRef);
+        cache.Enable(pglStateCache::CAP_ALPHA_TEST, true);
+        cache.AlphaFunc(alphaCompareTable[texEnv[i].alphaCompareMode],texEnv[i].alphaRef);
     }
     else
     {
-        glDisable(GL_ALPHA_TEST);
+        cache.Enable(pglStateCache::CAP_ALPHA_TEST, false);
     }
 
     if(texEnv[i].alphaBlendMode == PDDI_BLEND_NONE)
     {
-        glDisable(GL_BLEND);
+        cache.Enable(pglStateCache::CAP_BLEND, false);
     }
     else
     {
-        glEnable(GL_BLEND);
+        cache.Enable(pglStateCache::CAP_BLEND, true);
 #ifdef RAD_GLES
         if(context->GetDisplay()->ExtBlend())
-            glBlendEquationSeparateOES(alphaBlendTable[texEnv[i].alphaBlendMode][0],alphaBlendTable[texEnv[i].alphaBlendMode][0]);
-#else
-        glBlendEquation(alphaBlendTable[texEnv[i].alphaBlendMode][0]);
 #endif
-        glBlendFunc(alphaBlendTable[texEnv[i].alphaBlendMode][1],alphaBlendTable[texEnv[i].alphaBlendMode][2]);
+            cache.BlendEquation(alphaBlendTable[texEnv[i].alphaBlendMode][0]);
+        cache.BlendFunc(alphaBlendTable[texEnv[i].alphaBlendMode][1],alphaBlendTable[texEnv[i].alphaBlendMode][2]);
     }
  
     if(texEnv[i].lit)
     {
-        float c[4];
+        float ambient[4], emissive[4], diffuse[4], specular[4];
+        FillGLColour(texEnv[i].ambient, ambient);
+        FillGLColour(texEnv[i].emissive, emissive);
+        FillGLColour(texEnv[i].diffuse, diffuse);
+        FillGLColour(texEnv[i].specular, specular);
+        cache.Material(texEnv[i].shininess, ambient, emissive, diffuse, specular);
 
-        glMaterialf(GL_FRONT_AND_BACK,GL_SHININESS, texEnv[i].shininess);
-
-        FillGLColour(texEnv[i].ambient, c);
-        glMaterialfv(GL_FRONT_AND_BACK,GL_AMBIENT, c);
-
-        FillGLColour(texEnv[i].emissive, c);
-        glMaterialfv(GL_FRONT_AND_BACK,GL_EMISSION, c);
-
-        FillGLColour(texEnv[i].diffuse, c);
-        glMaterialfv(GL_FRONT_AND_BACK,GL_DIFFUSE, c);
-
-        FillGLColour(texEnv[i].specular, c);
-        glMaterialfv(GL_FRONT_AND_BACK,GL_SPECULAR, c);
-
-        glEnable(GL_LIGHTING);
+        cache.Enable(pglStateCache::CAP_LIGHTING, true);
         glDisableClientState(GL_COLOR_ARRAY);
     }
     else
     {
-        glDisable(GL_LIGHTING);
+        cache.Enable(pglStateCache::CAP_LIGHTING, false);
         glDisableClientState(GL_NORMAL_ARRAY);
     }
 
-    if( texEnv[i].twoSided || context->GetCullMode() == PDDI_CULL_NONE )
-    {
-        glDisable(GL_CULL_FACE);
-    }
-    else
-    {
-        glEnable(GL_CULL_FACE);
-    }
+    cache.Enable(pglStateCache::CAP_CULL_FACE, !( texEnv[i].twoSided || context->GetCullMode() == PDDI_CULL_NONE ));
 }
 
 

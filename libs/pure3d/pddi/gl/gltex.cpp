@@ -103,16 +103,18 @@ void pglTexture::SetGLState(void)
     {
         contextID = context->contextID;
         gltexture = 0;
+        samplerMag = samplerMin = samplerWrap = -1;
     }
 
     MICROPROFILE_SCOPEI("PDDI", "pglTexture::SetGLState", MP_RED);
 
-    glEnable(GL_TEXTURE_2D);
+    context->stateCache.Enable(pglStateCache::CAP_TEXTURE_2D, true);
     if(!valid)
     {
         glDeleteTextures(1, &gltexture);
         glGenTextures(1,&gltexture);
         glBindTexture(GL_TEXTURE_2D, gltexture);
+        samplerMag = samplerMin = samplerWrap = -1;
 
 //      if(nMipMap == 0)
         if (type == PDDI_TEXTYPE_DXT1 || type == PDDI_TEXTYPE_DXT3 || type == PDDI_TEXTYPE_DXT5)
@@ -203,10 +205,31 @@ void pglTexture::SetGLState(void)
         glBindTexture(GL_TEXTURE_2D, gltexture);
     }
 
-#if !defined RAD_GLES && !defined RAD_VITAGL
+#if !defined RAD_GLES && !defined RAD_VITAGL && !defined __SWITCH__
+    // Mesa ignores texture priorities, but still looks the texture up
     float fpriority = float(priority) / 31.0f;
     glPrioritizeTextures(1, &gltexture, &fpriority);
 #endif
+}
+
+void pglTexture::SetSampler(int magFilter, int minFilter, int wrap)
+{
+    if(samplerMag != magFilter)
+    {
+        samplerMag = magFilter;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magFilter);
+    }
+    if(samplerMin != minFilter)
+    {
+        samplerMin = minFilter;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter);
+    }
+    if(samplerWrap != wrap)
+    {
+        samplerWrap = wrap;
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+    }
 }
 
 int fastlog2(int x)
@@ -317,6 +340,7 @@ pglTexture::pglTexture(pglContext* c)
     gltexture = 0;
     priority = 15;
     valid = false;
+    samplerMag = samplerMin = samplerWrap = -1;
 }
 
 pglTexture::~pglTexture()

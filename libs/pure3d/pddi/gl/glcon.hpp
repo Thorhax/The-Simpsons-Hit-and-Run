@@ -18,6 +18,44 @@ class pglExtContext;
 class pglExtGamma;
 
 //--------------------------------------------------------------
+// Skips GL state calls that wouldn't change anything. Mesa still pays for
+// every call, and some (materials, enables) make it revalidate the
+// fixed-function state before the next draw. Only the GL backend changes this
+// state, so the cache stays in sync as long as all changes go through it.
+struct pglStateCache
+{
+    enum Cap
+    {
+        CAP_TEXTURE_2D,
+        CAP_ALPHA_TEST,
+        CAP_BLEND,
+        CAP_LIGHTING,
+        CAP_CULL_FACE,
+        NUM_CAPS
+    };
+
+    void Invalidate();
+
+    void Enable(Cap cap, bool enable);
+    void AlphaFunc(unsigned func, float ref);
+    void BlendEquation(unsigned equation);
+    void BlendFunc(unsigned src, unsigned dst);
+    void TexEnvMode(int mode);
+    void Material(float shininess, const float* ambient, const float* emissive,
+                  const float* diffuse, const float* specular);
+    void SwapInterval(int interval);
+
+private:
+    signed char enabled[NUM_CAPS];  // -1 when unknown
+    bool alphaValid, blendEquationValid, blendFuncValid, materialValid;
+    unsigned alphaFunc, blendEquation, blendSrc, blendDst;
+    float alphaRef;
+    int texEnvMode;
+    int swapInterval;
+    float material[17];             // shininess and the four colours
+};
+
+//--------------------------------------------------------------
 class pglContext : public pddiBaseContext
 {
 public :
@@ -84,6 +122,8 @@ public :
     pglDisplay* GetDisplay(void) {return display;}
 
     unsigned contextID;
+
+    pglStateCache stateCache;
 
 protected:
     void LoadHardwareMatrix(pddiMatrixType id);

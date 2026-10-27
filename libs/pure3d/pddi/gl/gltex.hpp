@@ -42,6 +42,8 @@ public:
 
     // gl specific stuff
     void SetGLState(void);
+    // Filtering and wrapping of the bound texture, skipped when unchanged
+    void SetSampler(int magFilter, int minFilter, int wrap);
 
 protected:
     pglContext* context;
@@ -55,6 +57,7 @@ protected:
     bool valid;
     unsigned int gltexture;
     int priority;
+    int samplerMag, samplerMin, samplerWrap;
 
     pddiLockInfo lock;
 

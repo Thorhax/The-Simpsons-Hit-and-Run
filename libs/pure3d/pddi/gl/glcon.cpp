@@ -76,6 +76,7 @@ pglContext::pglContext(pglDevice* dev, pglDisplay* disp) : pddiBaseContext((pddi
     disp->SetContext(this);
 
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTexSize);
+    stateCache.Invalidate();
     DefaultState();
     contextID = 0;
 
@@ -98,22 +99,115 @@ pglContext::~pglContext()
     device->Release();
 }
 
+//--------------------------------------------------------------
+void pglStateCache::Invalidate()
+{
+    memset(enabled, -1, sizeof(enabled));
+    alphaValid = blendEquationValid = blendFuncValid = materialValid = false;
+    texEnvMode = -1;
+    swapInterval = -1;
+}
+
+void pglStateCache::Enable(Cap cap, bool enable)
+{
+    static const GLenum caps[NUM_CAPS] = { GL_TEXTURE_2D, GL_ALPHA_TEST, GL_BLEND, GL_LIGHTING, GL_CULL_FACE };
+
+    if(enabled[cap] == (signed char)enable)
+        return;
+    enabled[cap] = enable;
+    if(enable)
+        glEnable(caps[cap]);
+    else
+        glDisable(caps[cap]);
+}
+
+void pglStateCache::AlphaFunc(unsigned func, float ref)
+{
+    if(alphaValid && alphaFunc == func && alphaRef == ref)
+        return;
+    alphaValid = true;
+    alphaFunc = func;
+    alphaRef = ref;
+    glAlphaFunc(func, ref);
+}
+
+void pglStateCache::BlendEquation(unsigned equation)
+{
+    if(blendEquationValid && blendEquation == equation)
+        return;
+    blendEquationValid = true;
+    blendEquation = equation;
+#ifdef RAD_GLES
+    glBlendEquationSeparateOES(equation, equation);
+#else
+    glBlendEquation(equation);
+#endif
+}
+
+void pglStateCache::BlendFunc(unsigned src, unsigned dst)
+{
+    if(blendFuncValid && blendSrc == src && blendDst == dst)
+        return;
+    blendFuncValid = true;
+    blendSrc = src;
+    blendDst = dst;
+    glBlendFunc(src, dst);
+}
+
+void pglStateCache::TexEnvMode(int mode)
+{
+    if(texEnvMode == mode)
+        return;
+    texEnvMode = mode;
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, mode);
+}
+
+void pglStateCache::Material(float shininess, const float* ambient, const float* emissive,
+                             const float* diffuse, const float* specular)
+{
+    float m[17];
+    m[0] = shininess;
+    memcpy(m + 1, ambient, 4 * sizeof(float));
+    memcpy(m + 5, emissive, 4 * sizeof(float));
+    memcpy(m + 9, diffuse, 4 * sizeof(float));
+    memcpy(m + 13, specular, 4 * sizeof(float));
+    if(materialValid && memcmp(m, material, sizeof(m)) == 0)
+        return;
+    materialValid = true;
+    memcpy(material, m, sizeof(m));
+
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, shininess);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, ambient);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, emissive);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, diffuse);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, specular);
+}
+
+void pglStateCache::SwapInterval(int interval)
+{
+    if(swapInterval == interval)
+        return;
+    swapInterval = interval;
+    SDL_GL_SetSwapInterval(interval);
+}
+
 // frame synchronisation
 void pglContext::BeginFrame()
 {
     pddiBaseContext::BeginFrame();
 
-    SDL_GL_SetSwapInterval(display->GetForceVSync() ? 1 : 0);
+    stateCache.SwapInterval(display->GetForceVSync() ? 1 : 0);
 
     if(display->HasReset())
     {
         contextID++;
+        stateCache.Invalidate();
 
 #ifndef RAD_VITAGL
         glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
 #endif
         glEnableClientState(GL_VERTEX_ARRAY);
-        glEnable(GL_CULL_FACE);
+        stateCache.Enable(pglStateCache::CAP_CULL_FACE, true);
         glCullFace(GL_FRONT);
         glColor4f(1,1,1,1);
 
@@ -917,11 +1011,11 @@ void pglContext::SetCullMode(pddiCullMode mode)
 
     if(mode == PDDI_CULL_NONE)
     {
-        glDisable(GL_CULL_FACE);
+        stateCache.Enable(pglStateCache::CAP_CULL_FACE, false);
     }
     else
     {
-        glEnable(GL_CULL_FACE);
+        stateCache.Enable(pglStateCache::CAP_CULL_FACE, true);
         glCullFace(cullModeTable[mode]);
     }
 }
