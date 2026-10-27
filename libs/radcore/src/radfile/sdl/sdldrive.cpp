@@ -94,6 +94,12 @@ radSdlDrive::radSdlDrive( const char* pdrivespec, radMemoryAllocator alloc )
     rAssert( m_pDriveThread != NULL );
 
     //
+    // The drive path is left empty for the default drive, so make sure it
+    // doesn't contain garbage from the allocator
+    //
+    m_DrivePath[0] = '\0';
+
+    //
     // Copy the drivename
     //
     radGetDefaultDrive( m_DriveName );
@@ -112,11 +118,14 @@ radSdlDrive::radSdlDrive( const char* pdrivespec, radMemoryAllocator alloc )
 #if SDL_MAJOR_VERSION < 3
 #ifdef WIN32
         _getcwd( m_DrivePath, radFileFilenameMax );
-        strncat(m_DrivePath, "/", radFileFilenameMax);
 #else
         getcwd( m_DrivePath, radFileFilenameMax );
-        strncat(m_DrivePath, "/", radFileFilenameMax);
 #endif
+        size_t len = strlen( m_DrivePath );
+        if( len > 0 && m_DrivePath[len - 1] != '/' && m_DrivePath[len - 1] != '\\' )
+        {
+            strncat( m_DrivePath, "/", radFileFilenameMax - len );
+        }
 #else
         char* cwd = SDL_GetCurrentDirectory();
         strncpy(m_DrivePath, cwd, radFileFilenameMax);
