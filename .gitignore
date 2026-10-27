@@ -6,3 +6,4 @@ romfs/
 module/
 art/
 CMakeSettings.json
+build-*/

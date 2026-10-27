@@ -56,6 +56,10 @@ find_package(PNG REQUIRED)
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 find_package(OpenAL REQUIRED)
+if(TARGET OpenAL::OpenAL AND NOT OPENAL_LIBRARY)
+	# Newer OpenAL Soft packages only provide a config file with an imported target
+	set(OPENAL_LIBRARY OpenAL::OpenAL)
+endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 	add_compile_options(-fvisibility=hidden)
@@ -183,10 +187,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
 		AUTHOR "Radical Entertainment"
 		VERSION ${SRR2_VERSION}
 	)
-	nx_create_nro(code/${PROJECT_NAME}
+	# The romfs folder holds the frontend assets copied from the PC release
+	if(EXISTS "${CMAKE_SOURCE_DIR}/romfs")
+		set(SRR2_ROMFS ROMFS romfs)
+	else()
+		message(WARNING "No romfs folder found, the frontend assets will not be embedded in the NRO")
+	endif()
+	nx_create_nro(${PROJECT_NAME}_nro
+		TARGET ${PROJECT_NAME}
 		OUTPUT ${SRR2_FILENAME}${SRR2_REGION}.nro
 		ICON ${PROJECT_NAME}.jpg
 		NACP ${PROJECT_NAME}.nacp
-		ROMFS romfs
+		${SRR2_ROMFS}
 	)
 endif()

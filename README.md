@@ -14,6 +14,18 @@ Finally download the [latest release](https://github.com/ZenoArrows/The-Simpsons
 
 On the PS Vita this game also requires that you have `libshacccg.suprx` installed on your console. This will be installed during the first run setup of the [VitaDB Downloader](https://vitadb.rinnegatamante.it/#/info/877), but can also be installed separately using [ShaRKBR33D](https://vitadb.rinnegatamante.it/#/info/997).
 
+# Building for the Switch
+
+The Switch build uses the official devkitPro docker image (tested with devkitA64 GCC 15.2, libnx 4.12):
+
+```
+docker run --rm -v $PWD:/src -w /src devkitpro/devkita64:latest bash -c '\
+  /opt/devkitpro/portlibs/switch/bin/aarch64-none-elf-cmake -S . -B build-switch -DCMAKE_BUILD_TYPE=Release && \
+  cmake --build build-switch -j$(nproc)'
+```
+
+Pass `-DSRR2_REGION=PAL` for the multi-language version. To embed the frontend assets in the `.nro`, place them in a `romfs` folder at the root of the repository before configuring.
+
 # Multi-Language support
 
 The PAL version supports multiple languages and will use the language that matches the system language of your console. If your console is set to a language that is not supported a menu will be shown giving you the option to choose between the supported languages.

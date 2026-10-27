@@ -64,6 +64,8 @@ void  operator delete(void* pMemory)
 #ifndef RAD_MW
 throw()
 #endif
+#else
+noexcept
 #endif
 ;
 
@@ -86,6 +88,8 @@ void  operator delete[]( void* pMemory )
 #ifndef RAD_MW
 throw()
 #endif
+#else
+noexcept
 #endif
 ;
 
