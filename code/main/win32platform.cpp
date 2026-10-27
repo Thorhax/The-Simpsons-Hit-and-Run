@@ -321,11 +321,8 @@ bool Win32Platform::InitializeWindow()
     SDL_GL_SetAttribute( SDL_GL_CONTEXT_MAJOR_VERSION, 2 );
     SDL_GL_SetAttribute( SDL_GL_CONTEXT_MINOR_VERSION, 1 );
 #endif
-#ifdef __SWITCH__
-    SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE, 32 );
-#else
+    // Mesa on the Switch can't create a window framebuffer with a 32-bit float depth buffer
     SDL_GL_SetAttribute( SDL_GL_DEPTH_SIZE, 24 );
-#endif
     SDL_GL_SetAttribute( SDL_GL_STENCIL_SIZE, 0 );
 
     int flags = 0;
