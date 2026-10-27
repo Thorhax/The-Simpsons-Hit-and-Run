@@ -138,6 +138,7 @@ set(SRR2_SOURCES
 	"main/commandlineoptions.cpp"
 	"main/game.cpp"
 	"main/pchsrr2.cpp"
+	"main/perflog.cpp"
 	"main/singletons.cpp"
 	"main/tuidunaligned.cpp"
 	"main/win32main.cpp"

@@ -39,6 +39,7 @@ unsigned int sceLibcHeapSize = 16 * 1024 * 1024;
 #include <main/win32platform.h>
 #include <main/singletons.h>
 #include <main/commandlineoptions.h>
+#include <main/perflog.h>
 #include <memory/memoryutilities.h>
 #include <memory/srrmemory.h>
 #include <p3d/entity.hpp>
@@ -234,7 +235,10 @@ void ProcessCommandLineArguments(int argc, char* argv[])
     {
         rDebugPrintf( "arg%d: %s\n", i, argv[i] );
 
-        CommandLineOptions::HandleOption( argv[i] );
+        if( !PerfLog::HandleOption( argv[i] ) )
+        {
+            CommandLineOptions::HandleOption( argv[i] );
+        }
     }
 
     if( !CommandLineOptions::Get( CLO_ART_STATS ) )

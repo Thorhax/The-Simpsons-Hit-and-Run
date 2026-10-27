@@ -13,6 +13,7 @@
 // System Includes
 //========================================
 // Standard Library
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 // Foundation Tech
@@ -40,6 +41,11 @@
 #include <presentation/gui/ingame/guiscreenmissionload.h>
 #include <main/commandlineoptions.h>
 #include <main/game.h>
+#include <main/perflog.h>
+
+#ifdef __SWITCH__
+#include <switch.h>
+#endif
 #include <main/platform.h>
 
 #ifdef RAD_GAMECUBE
@@ -495,6 +501,8 @@ void Game::Run()
 
         BEGIN_PROFILE( "GameLoop" )
 
+        PerfLog::BeginFrame();
+
         unsigned newTime =  radTimeGetMilliseconds();
         unsigned elapsed = newTime - time;
         time = newTime;
@@ -539,14 +547,18 @@ void Game::Run()
         if ( !mpPlatform->PausedForErrors() )
         {
             DEMOPROFILE( g_DemoProfiler.Start(PROFILE_CHANNEL_AI); )
+            PerfLog::BeginSection( PerfLog::SECTION_UPDATE );
             mpTimerList->Service(); //nv
             mpGameFlow->OnTimerDone(elapsed, NULL);
+            PerfLog::EndSection( PerfLog::SECTION_UPDATE );
             DEMOPROFILE( g_DemoProfiler.Stop(PROFILE_CHANNEL_AI); )
 
             if( !mExitNow )
             {
                 DEMOPROFILE( g_DemoProfiler.Start(PROFILE_CHANNEL_RENDER); )
+                PerfLog::BeginSection( PerfLog::SECTION_RENDER );
                 mpRenderFlow->OnTimerDone(elapsed, NULL);
+                PerfLog::EndSection( PerfLog::SECTION_RENDER );
                 DEMOPROFILE( g_DemoProfiler.Stop(PROFILE_CHANNEL_RENDER); )
             }
         }
@@ -599,6 +611,21 @@ void Game::Run()
         DEMOPROFILE( g_DemoProfiler.Stop(PROFILE_CHANNEL_LOAD); )
 
         ++mFrameCount;
+
+        PerfLog::EndFrame();
+        if( PerfLog::ShouldExit() )
+        {
+            // Quit for unattended test runs. The whole process has to go: returning
+            // to the homebrew loader would leave the game's threads running.
+            PerfLog::Shutdown();
+            rReleasePrintf( "perf: autoexit\n" );
+            fflush( stdout );
+#ifdef __SWITCH__
+            svcExitProcess();
+#else
+            _Exit( 0 );
+#endif
+        }
 
         DEMOPROFILE( g_DemoProfiler.Stop(PROFILE_CHANNEL_ALL); )
 

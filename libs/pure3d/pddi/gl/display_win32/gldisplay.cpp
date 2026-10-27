@@ -329,9 +329,15 @@ void pglDisplay::SetGamma(float r, float g, float b)
 #endif
 }
 
+// Wait for the GPU after each swap, so frame time measurements show the GPU
+// and vsync wait in the swap instead of the next frame's first GL call
+bool g_pddiFinishAfterSwap = false;
+
 void pglDisplay::SwapBuffers(void)
 {
     SDL_GL_SwapWindow(win);
+    if (g_pddiFinishAfterSwap)
+        glFinish();
     reset = false;
 }
 

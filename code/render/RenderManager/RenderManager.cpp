@@ -33,6 +33,7 @@
 #include <render/RenderManager/RenderLayer.h>
 #include <render/Culling/WorldScene.h>
 #include <render/RenderManager/RenderManager.h>
+#include <main/perflog.h>
 #include <render/RenderManager/WorldRenderLayer.h>
 #include <render/RenderManager/FrontEndRenderLayer.h>
 #include <render/IntersectManager/IntersectManager.h>
@@ -499,7 +500,9 @@ void RenderManager::ContextUpdate( unsigned int iElapsedTime )
 
 
     BEGIN_PROFILE( "Swap Buffers" );
+    PerfLog::BeginSection( PerfLog::SECTION_SWAP );
     p3d::context->SwapBuffers();
+    PerfLog::EndSection( PerfLog::SECTION_SWAP );
     END_PROFILE( "Swap Buffers" );
 
 #if defined( RAD_XBOX ) || defined ( RAD_GAMECUBE ) || defined( RAD_WIN32 )
