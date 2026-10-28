@@ -19,12 +19,31 @@ On the PS Vita this game also requires that you have `libshacccg.suprx` installe
 The Switch build uses the official devkitPro docker image (tested with devkitA64 GCC 15.2, libnx 4.12):
 
 ```
-docker run --rm -v $PWD:/src -w /src devkitpro/devkita64:latest bash -c '\
-  /opt/devkitpro/portlibs/switch/bin/aarch64-none-elf-cmake -S . -B build-switch -DCMAKE_BUILD_TYPE=Release && \
-  cmake --build build-switch -j$(nproc)'
+tools/build-switch.sh NTSC    # or PAL for the multi-language version
 ```
 
-Pass `-DSRR2_REGION=PAL` for the multi-language version. The frontend assets are embedded in the `.nro`, so before configuring copy the game's `art/frontend/scrooby` folder to `romfs/art/frontend/scrooby` at the root of the repository. The build will refuse to configure without it, since the game crashes on boot when they are missing.
+This produces `build-NTSC/SimpsonsNTSC.nro`. The frontend assets are embedded in the `.nro`, so first copy the game's `art/frontend/scrooby` folder to `romfs/art/frontend/scrooby` at the root of the repository. The build will refuse to configure without it, since the game crashes on boot when they are missing.
+
+## Faster rendering with glthread (optional)
+
+Most of the main thread's time goes to the OpenGL driver. Mesa can do that work on a separate thread (glthread), but devkitPro's Mesa build doesn't support it on the Switch. `tools/switch-mesa/build-mesa.sh` rebuilds devkitPro's Mesa 20.1 with `tools/switch-mesa/glthread.patch` in the same docker image (it downloads Mesa and devkitPro's patches and checks their hashes). Run it once before `tools/build-switch.sh`, which then links against it:
+
+```
+tools/switch-mesa/build-mesa.sh
+tools/build-switch.sh NTSC
+```
+
+The game turns glthread on by default; with the stock Mesa this has no effect. Pass `noglthread` on the command line to turn it off. On a V1 Switch this removed the drops below 60 fps in the busiest scenes (for example from 50-58 fps to 60 fps in a level 6 street).
+
+## Measuring performance
+
+Options for test runs, passed on the command line (for example with `nxlink -s <nro> -- perflog`):
+
+- `perflog`: print the frame rate and where the frame time goes every 5 seconds
+- `autoexit=<seconds>`: quit after the given time
+- `perfsync`: wait for the GPU after each swap, so the frame time breakdown separates CPU and GPU time
+- `perfsample`: sample the main thread and write the samples to `sdmc:/switch/simpsons/perf_samples.bin` on autoexit
+- the game's own `skipfe l<level>` (start a level directly) and `demotest` (play the attract demo in the engine, a car driving through a level)
 
 # Multi-Language support
 

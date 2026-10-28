@@ -1,0 +1,142 @@
+glthread support for devkitPro switch-mesa 20.1.0 (applies on top of switch-mesa-20.1.0-5.patch)
+
+- egl_switch: provide the set_background_context hook glthread's worker thread calls on startup,
+  start glthread on the first make_current when MESA_GLTHREAD is set, and wait for the worker
+  before switching contexts and before swapping buffers
+- u_thread: give Mesa threads a 4 MiB stack; libnx's default of 128 KiB overflows in the shader
+  compiler, which runs on the worker thread with glthread
+
+--- a/src/egl/meson.build
++++ b/src/egl/meson.build
+@@ -139,7 +139,7 @@
+   link_for_egl += libgl
+   deps_for_egl += cpp.find_library('be')
+ elif with_platform_switch
+-  incs_for_egl += [inc_gallium, inc_gallium_aux, inc_gallium_winsys, inc_mesa]
++  incs_for_egl += [inc_gallium, inc_gallium_aux, inc_gallium_winsys, inc_mesa, inc_mapi]
+   files_egl += files('drivers/switch/egl_switch.c')
+   objs_for_egl += [
+     libmesa_common.extract_all_objects(),
+--- a/src/egl/drivers/switch/egl_switch.c
++++ b/src/egl/drivers/switch/egl_switch.c
+@@ -27,6 +27,8 @@
+ #include <errno.h>
+ #include <stdint.h>
+ #include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
+ 
+ #include "eglconfig.h"
+ #include "eglcontext.h"
+@@ -56,6 +58,10 @@
+ #include "util/u_memory.h"
+ 
+ #include "state_tracker/st_api.h"
++#include "state_tracker/st_context.h"
++#include "main/mtypes.h"
++#include "main/glthread.h"
++#include "glapi/glapi.h"
+ #include "state_tracker/st_gl_api.h"
+ #include "state_tracker/drm_driver.h"
+ 
+@@ -447,6 +453,14 @@
+     return EGL_TRUE;
+ }
+ 
++// Called by glthread's worker thread when it starts. The worker binds the GL
++// context itself; there is no loader state to update on the Switch.
++static void
++switch_st_set_background_context(struct st_context_iface *stctx,
++                                 struct util_queue_monitoring *queue_info)
++{
++}
++
+ // Called from st_api_create_context. This is only ever used for detecting
+ // whether the ST_MANAGER_BROKEN_INVALIDATE workaround is required.
+ static int
+@@ -490,6 +504,7 @@
+     }
+ 
+     stmgr->get_param = switch_st_get_param;
++    stmgr->set_background_context = switch_st_set_background_context;
+ 
+     // Create nouveau screen
+     TRACE("Creating nouveau screen\n");
+@@ -631,6 +646,21 @@
+ }
+ 
+ 
++// glthread runs the driver work on a separate thread. It is opt-in with the
++// MESA_GLTHREAD environment variable (set it before the context is bound).
++static bool
++switch_glthread_wanted(void)
++{
++    const char *value = getenv("MESA_GLTHREAD");
++    return value && strcmp(value, "0") != 0 && strcmp(value, "false") != 0;
++}
++
++static struct gl_context *
++switch_gl_context(struct st_context_iface *stctx)
++{
++    return stctx ? ((struct st_context *)stctx)->ctx : NULL;
++}
++
+ static EGLBoolean
+ switch_make_current(_EGLDriver* drv, _EGLDisplay* dpy, _EGLSurface *dsurf,
+     _EGLSurface *rsurf, _EGLContext *ctx)
+@@ -647,9 +677,24 @@
+     if (!_eglBindContext(ctx, dsurf, rsurf, &old_ctx, &old_dsurf, &old_rsurf))
+         return EGL_FALSE;
+ 
++    // Let the current context's worker thread finish before switching
++    struct gl_context *cur_gl = switch_gl_context(disp->stapi->get_current(disp->stapi));
++    if (cur_gl)
++        _mesa_glthread_finish(cur_gl);
++
+     EGLBoolean ret = disp->stapi->make_current(disp->stapi, cont ? cont->stctx : NULL,
+         draw_surf ? draw_surf->stfbi : NULL, read_surf ? read_surf->stfbi : NULL);
+ 
++    if (ret && cont && switch_glthread_wanted()) {
++        struct gl_context *gl = switch_gl_context(cont->stctx);
++        if (!gl->GLThread.enabled) {
++            _mesa_glthread_init(gl);
++            // _mesa_glthread_init only switches the context's client dispatch
++            if (gl->GLThread.enabled)
++                _glapi_set_dispatch(gl->CurrentClientDispatch);
++        }
++    }
++
+     if (old_ctx) {
+         if (old_dsurf) {
+             switch_destroy_surface(drv, dpy, old_dsurf);
+@@ -682,6 +727,9 @@
+     struct switch_egl_surface* surface = switch_egl_surface(surf);
+     struct switch_egl_context* context = switch_egl_context(surface->base.CurrentContext);
+ 
++    // The worker thread may still be drawing to this surface
++    _mesa_glthread_finish(switch_gl_context(context->stctx));
++
+     if (surface->cur_slot < 0) {
+         TRACE("Nothing to do\n");
+         return EGL_TRUE;
+--- a/src/util/u_thread.h
++++ b/src/util/u_thread.h
+@@ -51,7 +51,17 @@
+ static inline thrd_t u_thread_create(int (*routine)(void *), void *param)
+ {
+    thrd_t thread;
+-#ifdef HAVE_PTHREAD
++#if defined(__SWITCH__)
++   /* libnx gives C11 threads a 128 KiB stack, far too small for the shader
++    * compiler, which runs on glthread's worker thread when it's enabled. */
++   pthread_attr_t attr;
++   int ret;
++
++   pthread_attr_init(&attr);
++   pthread_attr_setstacksize(&attr, 4 * 1024 * 1024);
++   ret = pthread_create(&thread, &attr, (void *(*)(void *))routine, param);
++   pthread_attr_destroy(&attr);
++#elif defined(HAVE_PTHREAD)
+    sigset_t saved_set, new_set;
+    int ret;
+ 

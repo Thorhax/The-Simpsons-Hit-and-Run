@@ -224,6 +224,13 @@ extern "C" int main( int argc, char *argv[] )
 //=============================================================================
 void ProcessCommandLineArguments(int argc, char* argv[])
 {
+#ifdef __SWITCH__
+    // Run the GL driver work on its own thread. This needs Mesa built with
+    // tools/switch-mesa/build-mesa.sh; the stock devkitPro Mesa ignores it.
+    // The "noglthread" option turns it off.
+    setenv( "MESA_GLTHREAD", "1", 1 );
+#endif
+
     rDebugPrintf( "*************************************************************************\n" );
     rDebugPrintf( "Command Line Args:\n" );
 
@@ -235,6 +242,13 @@ void ProcessCommandLineArguments(int argc, char* argv[])
     {
         rDebugPrintf( "arg%d: %s\n", i, argv[i] );
 
+#ifdef __SWITCH__
+        if( strcmp( argv[i], "noglthread" ) == 0 )
+        {
+            unsetenv( "MESA_GLTHREAD" );
+            continue;
+        }
+#endif
         if( !PerfLog::HandleOption( argv[i] ) )
         {
             CommandLineOptions::HandleOption( argv[i] );
