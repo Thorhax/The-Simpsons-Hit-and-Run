@@ -29,12 +29,12 @@ extern bool g_pddiFinishAfterSwap;
 namespace
 {
     const int SAMPLE_FRAMES = 12;
-    const unsigned int MAX_SAMPLES = 100000;
+    const unsigned int MAX_SAMPLES = 300000;    // about 5 minutes
 
     struct Sample
     {
         unsigned int context;
-        unsigned int count;
+        unsigned int timeMs;    // since the sampler started (the first frame)
         unsigned long long pc;
         unsigned long long frames[ SAMPLE_FRAMES ];
     };
@@ -45,6 +45,7 @@ namespace
     Sample* sSamples = NULL;
     unsigned int sNumSamples = 0;
     volatile int sSampleContext = -1;
+    radTime64 sSamplerStart = 0;
 
     void SamplerMain( void* )
     {
@@ -72,7 +73,7 @@ namespace
                 Sample& s = sSamples[ sNumSamples ];
                 memset( &s, 0, sizeof( s ) );
                 s.context = sSampleContext;
-                s.count = 1;
+                s.timeMs = (unsigned int)( ( radTimeGetMicroseconds64() - sSamplerStart ) / 1000 );
                 s.pc = ctx.pc.x - base;
 
                 // The leaf may not have stored its frame record yet, so keep the link register too
@@ -104,6 +105,7 @@ namespace
             printf( "perf: no memory for samples\n" );
             return;
         }
+        sSamplerStart = radTimeGetMicroseconds64();
         // Run on core 2, away from the main thread on core 0
         if( R_SUCCEEDED( threadCreate( &sSamplerThread, SamplerMain, NULL, NULL, 0x4000, 0x20, 2 ) ) )
         {
@@ -149,6 +151,7 @@ namespace
     radTime64 sFrameStart = 0;
     radTime64 sReportStart = 0;
     radTime64 sSectionStart[ PerfLog::NUM_SECTIONS ];
+    radTime64 sFrameSection[ PerfLog::NUM_SECTIONS ];   // this frame only
 
     // Totals over the current report interval
     unsigned int sFrames = 0;
@@ -230,6 +233,7 @@ void PerfLog::BeginFrame()
     }
 
     sFrameStart = radTimeGetMicroseconds64();
+    memset( sFrameSection, 0, sizeof( sFrameSection ) );
     if( sStartTime == 0 )
     {
         sStartTime = sFrameStart;
@@ -259,7 +263,17 @@ void PerfLog::EndFrame()
     sFrameTotal += frame;
     if( frame > sFrameMax ) sFrameMax = frame;
     if( frame > FRAME_60HZ ) sOver60++;
-    if( frame > FRAME_30HZ ) sOver30++;
+    if( frame > FRAME_30HZ )
+    {
+        sOver30++;
+
+        // Report each hitch with what the frame spent its time on
+        printf( "perf: hitch t=%.3fs %.1f ms | update %.1f render %.1f swap %.1f ms\n",
+                ( now - sStartTime ) / 1000000.0, frame / 1000.0,
+                sFrameSection[ SECTION_UPDATE ] / 1000.0,
+                ( sFrameSection[ SECTION_RENDER ] - sFrameSection[ SECTION_SWAP ] ) / 1000.0,
+                sFrameSection[ SECTION_SWAP ] / 1000.0 );
+    }
 
     // Report each context change, closing the interval so it covers one context
     int context = GetGameFlow() ? GetGameFlow()->GetCurrentContext() : -1;
@@ -291,7 +305,9 @@ void PerfLog::EndSection( Section section )
 {
     if( sEnabled )
     {
-        sSectionTotal[ section ] += radTimeGetMicroseconds64() - sSectionStart[ section ];
+        radTime64 elapsed = radTimeGetMicroseconds64() - sSectionStart[ section ];
+        sSectionTotal[ section ] += elapsed;
+        sFrameSection[ section ] += elapsed;
     }
 }
 
