@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.6.3...3.10)
 project(SRR2)
 
 set(SRR2_TITLE "Simpsons Hit & Run")
-set(SRR2_VERSION "00.61")
+set(SRR2_VERSION "00.70")
 set(SRR2_FILENAME "Simpsons")
 set(SRR2_REGION "NTSC" CACHE STRING "Select PAL for the EFIGS multi-language version")
 set_property(CACHE SRR2_REGION PROPERTY STRINGS "NTSC" "PAL")
