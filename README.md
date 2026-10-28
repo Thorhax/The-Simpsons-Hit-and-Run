@@ -4,13 +4,24 @@ This is a port of The Simpsons Hit & Run to the Nintendo Switch and PS Vita base
 
 Please report any bugs or feature requests in the issues tab on this Github repository.
 
+## About this fork
+
+This fork of [ZenoArrows' port](https://github.com/ZenoArrows/The-Simpsons-Hit-and-Run) keeps the Switch version building with current devkitPro releases and fixes the problems that caused on the console:
+
+- Builds with devkitA64 GCC 15, libnx 4.12 and the current Switch portlibs (Mesa 20.1, FFmpeg 7.1, SDL2 2.28)
+- Fixes a crash on boot with the current Mesa (32-bit depth buffer) and the game not finding its files on the SD card
+- Movies with no audio track or larger than 1024 pixels no longer crash the game
+- Optional glthread support, which moves the OpenGL driver work to another CPU core and keeps busy scenes at 60 fps (see below)
+
+All credit for the port itself goes to ZenoArrows.
+
 # Installation
 
-This port uses the PC assets, so you will need to have the PC version of the game installed. Do not use the assets from the source code leak as those are not the final version, instead use the assets from the official release. Also make sure you're using the original `.rmv` movie files in the `movies` folder rather than the converted `.bk2` files that older releases of the port required.
+This port uses the PC assets, so you will need to have the PC version of the game installed. Do not use the assets from the source code leak as those are not the final version, instead use the assets from the official release. Also make sure you're using the original `.rmv` movie files in the `movies` folder rather than the converted `.bk2` files that older releases of the port required. Some PC mods (such as Bink 2 upscales) replace the `.rmv` files and keep the originals as `.bik` files: rename those back to `.rmv`, since Bink 2 movies can't be played and will be skipped.
 
 To install the port simply copy the contents of the installation folder to `sdmc:/switch/simpsons` on the Switch or `ux0:/data/simpsons` on the Vita.
 
-Finally download the [latest release](https://github.com/ZenoArrows/The-Simpsons-Hit-and-Run/releases) of this port and copy it to your console. On the Switch you simply put the `.nro` file into the same folder as the game data (`sdmc:/switch/simpsons`), on the Vita you can copy the `.vpk` file anywhere and install it using [VitaShell](https://github.com/TheOfficialFloW/VitaShell).
+Finally download the [latest release](https://github.com/Thorhax/The-Simpsons-Hit-and-Run/releases) of this port (or [ZenoArrows' releases](https://github.com/ZenoArrows/The-Simpsons-Hit-and-Run/releases) for the PS Vita) and copy it to your console. On the Switch you simply put the `.nro` file into the same folder as the game data (`sdmc:/switch/simpsons`), on the Vita you can copy the `.vpk` file anywhere and install it using [VitaShell](https://github.com/TheOfficialFloW/VitaShell).
 
 On the PS Vita this game also requires that you have `libshacccg.suprx` installed on your console. This will be installed during the first run setup of the [VitaDB Downloader](https://vitadb.rinnegatamante.it/#/info/877), but can also be installed separately using [ShaRKBR33D](https://vitadb.rinnegatamante.it/#/info/997).
 
