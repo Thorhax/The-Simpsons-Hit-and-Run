@@ -37,7 +37,7 @@ This produces `build-NTSC/SimpsonsNTSC.nro`. The frontend assets are embedded in
 
 ## Faster rendering with glthread (optional)
 
-Most of the main thread's time goes to the OpenGL driver. Mesa can do that work on a separate thread (glthread), but devkitPro's Mesa build doesn't support it on the Switch. `tools/switch-mesa/build-mesa.sh` rebuilds devkitPro's Mesa 20.1 with `tools/switch-mesa/glthread.patch` in the same docker image (it downloads Mesa and devkitPro's patches and checks their hashes). Run it once before `tools/build-switch.sh`, which then links against it:
+Most of the main thread's time goes to the OpenGL driver. Mesa can do that work on a separate thread (glthread), but devkitPro's Mesa build doesn't support it on the Switch. `tools/switch-mesa/build-mesa.sh` rebuilds devkitPro's Mesa 20.1 with `tools/switch-mesa/glthread.patch` (and `nouveau-texture-uploads.patch`, which makes streaming in textures cheaper) in the same docker image (it downloads Mesa and devkitPro's patches and checks their hashes). Run it once before `tools/build-switch.sh`, which then links against it:
 
 ```
 tools/switch-mesa/build-mesa.sh
@@ -51,8 +51,9 @@ The game turns glthread on by default; with the stock Mesa this has no effect. P
 Options for test runs, passed on the command line (for example with `nxlink -s <nro> -- perflog`):
 
 - `perflog`: print the frame rate and where the frame time goes every 5 seconds
-- `autoexit=<seconds>`: quit after the given time
+- `autoexit=<seconds>`: quit after the given time (the console then shows its "software was closed because an error occurred" message; that is expected, press A)
 - `perfsync`: wait for the GPU after each swap, so the frame time breakdown separates CPU and GPU time
+- `perfnovsync`: don't wait for vsync, so the frame rate shows how much time frames have to spare
 - `perfsample`: sample the main thread and write the samples to `sdmc:/switch/simpsons/perf_samples.bin` on autoexit
 - the game's own `skipfe l<level>` (start a level directly) and `demotest` (play the attract demo in the engine, a car driving through a level)
 

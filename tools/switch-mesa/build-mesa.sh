@@ -1,14 +1,14 @@
 #!/bin/sh
-# Rebuilds devkitPro's switch-mesa 20.1.0 with glthread support (see glthread.patch) inside the
-# devkitpro/devkita64 docker image. The libraries end up in build-mesa/lib at the root of the repository,
-# where tools/build-switch.sh picks them up.
+# Rebuilds devkitPro's switch-mesa 20.1.0 with glthread support (see glthread.patch) and faster texture
+# uploads (see nouveau-texture-uploads.patch) inside the devkitpro/devkita64 docker image. The libraries end
+# up in build-mesa/lib at the root of the repository, where tools/build-switch.sh picks them up.
 #
 # Usage: tools/switch-mesa/build-mesa.sh
 set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=$ROOT/build-mesa
 mkdir -p "$OUT"
-cp "$ROOT/tools/switch-mesa/glthread.patch" "$OUT/"
+cp "$ROOT/tools/switch-mesa/glthread.patch" "$ROOT/tools/switch-mesa/nouveau-texture-uploads.patch" "$OUT/"
 
 docker run --rm -v "$OUT:/work" -w /work devkitpro/devkita64:latest bash -euc '
 MESA=mesa-20.1.0-rc3
@@ -34,6 +34,7 @@ patch -s -p1 -i /work/switch-mesa-20.1.0-5.patch
 patch -s -p1 -i /work/gl_XML.py.patch
 patch -s -p1 -i /work/glX_XML.py.patch
 patch -s -p1 -i /work/glthread.patch
+patch -s -p1 -i /work/nouveau-texture-uploads.patch
 
 export PATH=/opt/devkitpro/devkitA64/bin:/opt/devkitpro/portlibs/switch/bin:$PATH
 /opt/devkitpro/meson-toolchain.sh switch > ../crossfile.txt

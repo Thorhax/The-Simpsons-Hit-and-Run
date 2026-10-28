@@ -1,0 +1,346 @@
+Faster texture uploads for the nouveau driver in devkitPro switch-mesa 20.1.0 (applies on top of glthread.patch)
+
+On the Switch, creating a buffer object takes several calls into the GPU driver (nvmap create, address space
+map, memory attribute change), which made streaming in textures cost a few hundred microseconds each.
+
+- nvc0_transfer: take the staging memory for texture uploads from the GART slab cache (nouveau_mm) instead
+  of creating and freeing a buffer object for every transfer (every mip level of every texture).
+- nvc0_miptree: keep the buffer objects of freed textures in a small cache (up to 128 entries / 16 MiB) and
+  reuse them for new textures of the same size and layout once the GPU is done with the old texture. The
+  cache is emptied when an allocation fails and when the screen is destroyed.
+
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_transfer.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_transfer.c
+@@ -2,6 +2,7 @@
+ #include "util/format/u_format.h"
+ 
+ #include "nvc0/nvc0_context.h"
++#include "nouveau_mm.h"
+ 
+ struct nvc0_transfer {
+    struct pipe_transfer base;
+@@ -9,6 +10,8 @@
+    uint32_t nblocksx;
+    uint16_t nblocksy;
+    uint16_t nlayers;
++   struct nouveau_mm_allocation *mm; /* staging memory from the GART slab cache */
++   uint32_t offset;                  /* of the staging memory in rect[1].bo */
+ };
+ 
+ static void
+@@ -366,6 +369,23 @@
+    return !mt->base.fence_wr || nouveau_fence_wait(mt->base.fence_wr, &nvc0->base.debug);
+ }
+ 
++static void
++nvc0_transfer_release_staging(struct nvc0_context *nvc0,
++                              struct nvc0_transfer *tx)
++{
++   struct nouveau_fence *fence = nvc0->screen->base.fence.current;
++
++   if (tx->mm) {
++      nouveau_bo_ref(NULL, &tx->rect[1].bo);
++      nouveau_fence_work(fence, nouveau_mm_free_work, tx->mm);
++      tx->mm = NULL;
++   } else {
++      /* Too large for the slab cache, so it got its own buffer object */
++      nouveau_fence_work(fence, nouveau_fence_unref_bo, tx->rect[1].bo);
++      tx->rect[1].bo = NULL;
++   }
++}
++
+ void *
+ nvc0_miptree_transfer_map(struct pipe_context *pctx,
+                           struct pipe_resource *res,
+@@ -375,12 +395,10 @@
+                           struct pipe_transfer **ptransfer)
+ {
+    struct nvc0_context *nvc0 = nvc0_context(pctx);
+-   struct nouveau_device *dev = nvc0->screen->base.device;
+    struct nv50_miptree *mt = nv50_miptree(res);
+    struct nvc0_transfer *tx;
+    uint32_t size;
+    int ret;
+-   unsigned flags = 0;
+ 
+    if (nvc0_mt_transfer_can_map_directly(mt)) {
+       ret = !nvc0_mt_sync(nvc0, mt, usage);
+@@ -434,13 +452,17 @@
+ 
+    size = tx->base.layer_stride;
+ 
+-   ret = nouveau_bo_new(dev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP, 0,
+-                        size * tx->nlayers, NULL, &tx->rect[1].bo);
+-   if (ret) {
++   /* Take the staging memory from the GART slab cache: creating a buffer
++    * object for each transfer takes several calls into the GPU driver on
++    * the Switch, which adds up when streaming in textures. */
++   tx->mm = nouveau_mm_allocate(nvc0->screen->base.mm_GART, size * tx->nlayers,
++                                &tx->rect[1].bo, &tx->offset);
++   if (!tx->rect[1].bo) {
+       pipe_resource_reference(&tx->base.resource, NULL);
+       FREE(tx);
+       return NULL;
+    }
++   tx->rect[1].base = tx->offset;
+ 
+    tx->rect[1].cpp = tx->rect[0].cpp;
+    tx->rect[1].width = tx->nblocksx;
+@@ -464,29 +486,24 @@
+       }
+       tx->rect[0].z = z;
+       tx->rect[0].base = base;
+-      tx->rect[1].base = 0;
++      tx->rect[1].base = tx->offset;
+    }
+ 
+-   if (tx->rect[1].bo->map) {
+-      *ptransfer = &tx->base;
+-      return tx->rect[1].bo->map;
+-   }
+-
+-   if (usage & PIPE_TRANSFER_READ)
+-      flags = NOUVEAU_BO_RD;
+-   if (usage & PIPE_TRANSFER_WRITE)
+-      flags |= NOUVEAU_BO_WR;
+-
+-   ret = nouveau_bo_map(tx->rect[1].bo, flags, nvc0->screen->base.client);
++   /* The slab is shared with other transfers that the GPU may still be
++    * using, so map it without waiting and only wait for our own copies. */
++   ret = nouveau_bo_map(tx->rect[1].bo, 0, NULL);
++   if (!ret && (usage & PIPE_TRANSFER_READ))
++      ret = nouveau_bo_wait(tx->rect[1].bo, NOUVEAU_BO_RD,
++                            nvc0->screen->base.client);
+    if (ret) {
+       pipe_resource_reference(&tx->base.resource, NULL);
+-      nouveau_bo_ref(NULL, &tx->rect[1].bo);
++      nvc0_transfer_release_staging(nvc0, tx);
+       FREE(tx);
+       return NULL;
+    }
+ 
+    *ptransfer = &tx->base;
+-   return tx->rect[1].bo->map;
++   return (uint8_t *)tx->rect[1].bo->map + tx->offset;
+ }
+ 
+ void
+@@ -516,13 +533,9 @@
+          tx->rect[1].base += tx->nblocksy * tx->base.stride;
+       }
+       NOUVEAU_DRV_STAT(&nvc0->screen->base, tex_transfers_wr, 1);
+-
+-      /* Allow the copies above to finish executing before freeing the source */
+-      nouveau_fence_work(nvc0->screen->base.fence.current,
+-                         nouveau_fence_unref_bo, tx->rect[1].bo);
+-   } else {
+-      nouveau_bo_ref(NULL, &tx->rect[1].bo);
+    }
++   /* Allow the copies above to finish executing before freeing the source */
++   nvc0_transfer_release_staging(nvc0, tx);
+    if (tx->base.usage & PIPE_TRANSFER_READ)
+       NOUVEAU_DRV_STAT(&nvc0->screen->base, tex_transfers_rd, 1);
+ 
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_miptree.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_miptree.c
+@@ -306,10 +306,123 @@
+    return true;
+ }
+ 
++/* Freed textures leave their buffer objects in a small cache, from which
++ * new textures of the same size and layout take them once the GPU is done
++ * with the old texture. Creating a buffer object takes several calls into
++ * the GPU driver on the Switch, and the game streams in and frees textures
++ * of the same few sizes all the time. */
++static void
++nvc0_tex_bo_cache_release(struct nvc0_tex_bo_cache_entry *entry)
++{
++   if (entry->fence && entry->fence->state < NOUVEAU_FENCE_STATE_FLUSHED)
++      nouveau_fence_work(entry->fence, nouveau_fence_unref_bo, entry->bo);
++   else
++      nouveau_bo_ref(NULL, &entry->bo);
++   nouveau_fence_ref(NULL, &entry->fence);
++}
++
++static void
++nvc0_tex_bo_cache_remove(struct nvc0_screen *screen, unsigned i)
++{
++   screen->tex_bo_cache.bytes -= screen->tex_bo_cache.entry[i].size;
++   screen->tex_bo_cache.count--;
++   memmove(&screen->tex_bo_cache.entry[i], &screen->tex_bo_cache.entry[i + 1],
++           (screen->tex_bo_cache.count - i) *
++           sizeof(struct nvc0_tex_bo_cache_entry));
++}
++
++void
++nvc0_tex_bo_cache_flush(struct nvc0_screen *screen)
++{
++   while (screen->tex_bo_cache.count) {
++      nvc0_tex_bo_cache_release(&screen->tex_bo_cache.entry[0]);
++      nvc0_tex_bo_cache_remove(screen, 0);
++   }
++}
++
++static struct nouveau_bo *
++nvc0_tex_bo_cache_get(struct nvc0_screen *screen, uint32_t size,
++                      uint32_t flags, const union nouveau_bo_config *config)
++{
++   struct nouveau_bo *bo;
++   int i;
++
++   for (i = screen->tex_bo_cache.count - 1; i >= 0; --i) {
++      struct nvc0_tex_bo_cache_entry *entry = &screen->tex_bo_cache.entry[i];
++
++      if (entry->size != size || entry->flags != flags ||
++          entry->memtype != config->nvc0.memtype ||
++          entry->tile_mode != config->nvc0.tile_mode)
++         continue;
++      if (entry->fence && !nouveau_fence_signalled(entry->fence))
++         continue;
++
++      bo = entry->bo;
++      nouveau_fence_ref(NULL, &entry->fence);
++      nvc0_tex_bo_cache_remove(screen, i);
++      return bo;
++   }
++   return NULL;
++}
++
++static bool
++nvc0_tex_bo_cache_put(struct pipe_screen *pscreen, struct nv50_miptree *mt)
++{
++   struct nvc0_screen *screen = nvc0_screen(pscreen);
++   struct nvc0_tex_bo_cache_entry *entry;
++   const unsigned shared = PIPE_BIND_SHARED | PIPE_BIND_SCANOUT |
++      PIPE_BIND_DISPLAY_TARGET | PIPE_BIND_CURSOR;
++   const bool compressed = nouveau_screen(pscreen)->drm->version >= 0x01000101;
++
++   if (!mt->base.bo || (mt->base.base.bind & shared) ||
++       (mt->base.base.flags & NVC0_RESOURCE_FLAG_VIDEO) ||
++       mt->total_size > NVC0_TEX_BO_CACHE_BYTES / 4)
++      return false;
++
++   while (screen->tex_bo_cache.count == NVC0_TEX_BO_CACHE_ENTRIES ||
++          screen->tex_bo_cache.bytes + mt->total_size > NVC0_TEX_BO_CACHE_BYTES) {
++      nvc0_tex_bo_cache_release(&screen->tex_bo_cache.entry[0]);
++      nvc0_tex_bo_cache_remove(screen, 0);
++   }
++
++   /* The same key that nvc0_miptree_create computes for the texture */
++   entry = &screen->tex_bo_cache.entry[screen->tex_bo_cache.count++];
++   entry->bo = mt->base.bo;
++   entry->fence = NULL;
++   nouveau_fence_ref(mt->base.fence, &entry->fence);
++   entry->size = mt->total_size;
++   entry->flags = mt->base.domain | NOUVEAU_BO_NOSNOOP;
++   entry->memtype = nvc0_mt_choose_storage_type(mt, compressed);
++   entry->tile_mode = mt->level[0].tile_mode;
++   screen->tex_bo_cache.bytes += mt->total_size;
++   mt->base.bo = NULL;
++   return true;
++}
++
++static void
++nvc0_miptree_destroy(struct pipe_screen *pscreen, struct pipe_resource *pt)
++{
++   struct nv50_miptree *mt = nv50_miptree(pt);
++
++   if (!nvc0_tex_bo_cache_put(pscreen, mt)) {
++      nv50_miptree_destroy(pscreen, pt);
++      return;
++   }
++
++   nouveau_fence_ref(NULL, &mt->base.fence);
++   nouveau_fence_ref(NULL, &mt->base.fence_wr);
++
++   NOUVEAU_DRV_STAT(nouveau_screen(pscreen), tex_obj_current_count, -1);
++   NOUVEAU_DRV_STAT(nouveau_screen(pscreen), tex_obj_current_bytes,
++                    -(uint64_t)mt->total_size);
++
++   FREE(mt);
++}
++
+ const struct u_resource_vtbl nvc0_miptree_vtbl =
+ {
+    nvc0_miptree_get_handle,         /* get_handle */
+-   nv50_miptree_destroy,            /* resource_destroy */
++   nvc0_miptree_destroy,            /* resource_destroy */
+    nvc0_miptree_transfer_map,       /* transfer_map */
+    u_default_transfer_flush_region, /* transfer_flush_region */
+    nvc0_miptree_transfer_unmap,     /* transfer_unmap */
+@@ -386,8 +499,19 @@
+    if (mt->base.base.bind & (PIPE_BIND_CURSOR | PIPE_BIND_DISPLAY_TARGET))
+       bo_flags |= NOUVEAU_BO_CONTIG;
+ 
+-   ret = nouveau_bo_new(dev, bo_flags, 4096, mt->total_size, &bo_config,
+-                        &mt->base.bo);
++   mt->base.bo = nvc0_tex_bo_cache_get(nvc0_screen(pscreen), mt->total_size,
++                                       bo_flags, &bo_config);
++   ret = 0;
++   if (!mt->base.bo) {
++      ret = nouveau_bo_new(dev, bo_flags, 4096, mt->total_size, &bo_config,
++                           &mt->base.bo);
++      if (ret) {
++         /* Out of memory: give back the cached buffer objects and retry */
++         nvc0_tex_bo_cache_flush(nvc0_screen(pscreen));
++         ret = nouveau_bo_new(dev, bo_flags, 4096, mt->total_size, &bo_config,
++                              &mt->base.bo);
++      }
++   }
+    if (ret) {
+       FREE(mt);
+       return NULL;
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_screen.h
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_screen.h
+@@ -66,6 +66,19 @@
+    int size;
+ };
+ 
++/* Buffer objects of freed textures kept for new textures, see nvc0_miptree.c */
++#define NVC0_TEX_BO_CACHE_ENTRIES 128
++#define NVC0_TEX_BO_CACHE_BYTES (16 << 20)
++
++struct nvc0_tex_bo_cache_entry {
++   struct nouveau_bo *bo;
++   struct nouveau_fence *fence; /* last use of the texture */
++   uint32_t size;
++   uint32_t flags;
++   uint32_t memtype;
++   uint32_t tile_mode;
++};
++
+ struct nvc0_screen {
+    struct nouveau_screen base;
+ 
+@@ -127,6 +140,12 @@
+    struct nouveau_object *m2mf;
+    struct nouveau_object *compute;
+    struct nouveau_object *nvsw;
++
++   struct {
++      struct nvc0_tex_bo_cache_entry entry[NVC0_TEX_BO_CACHE_ENTRIES]; /* oldest first */
++      unsigned count;
++      uint64_t bytes;
++   } tex_bo_cache;
+ };
+ 
+ static inline struct nvc0_screen *
+@@ -135,6 +154,8 @@
+    return (struct nvc0_screen *)screen;
+ }
+ 
++void nvc0_tex_bo_cache_flush(struct nvc0_screen *);
++
+ int nvc0_screen_get_driver_query_info(struct pipe_screen *, unsigned,
+                                       struct pipe_driver_query_info *);
+ 
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_screen.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_screen.c
+@@ -669,6 +669,7 @@
+       nouveau_fence_ref(NULL, &current);
+       nouveau_fence_ref(NULL, &screen->base.fence.current);
+    }
++   nvc0_tex_bo_cache_flush(screen);
+    if (screen->base.pushbuf)
+       screen->base.pushbuf->user_priv = NULL;
+ 
