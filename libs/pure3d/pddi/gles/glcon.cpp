@@ -322,12 +322,14 @@ pglContext::~pglContext()
     device->Release();
 }
 
+extern bool g_pddiNoVSync;
+
 // frame synchronisation
 void pglContext::BeginFrame()
 {
     pddiBaseContext::BeginFrame();
 
-    SDL_GL_SetSwapInterval(display->GetForceVSync() ? 1 : 0);
+    SDL_GL_SetSwapInterval(display->GetForceVSync() && !g_pddiNoVSync ? 1 : 0);
 
     if(display->HasReset())
     {

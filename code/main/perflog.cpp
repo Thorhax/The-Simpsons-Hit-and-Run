@@ -17,8 +17,9 @@
 #ifdef __SWITCH__
 #include <switch.h>
 
-// Defined by the OpenGL display: wait for the GPU after each swap
+// Defined by the OpenGL display: wait for the GPU after each swap, never wait for vsync
 extern bool g_pddiFinishAfterSwap;
+extern bool g_pddiNoVSync;
 
 //=============================================================================
 // Sampling profiler: a thread on another core pauses the main thread about
@@ -209,6 +210,11 @@ bool PerfLog::HandleOption( const char* option )
     if( strcmp( option, "perfsync" ) == 0 )
     {
         g_pddiFinishAfterSwap = true;
+        return true;
+    }
+    if( strcmp( option, "perfnovsync" ) == 0 )
+    {
+        g_pddiNoVSync = true;
         return true;
     }
 #endif

@@ -333,6 +333,9 @@ void pglDisplay::SetGamma(float r, float g, float b)
 // and vsync wait in the swap instead of the next frame's first GL call
 bool g_pddiFinishAfterSwap = false;
 
+// Never wait for vsync, so frame time measurements show how much time a frame has to spare
+bool g_pddiNoVSync = false;
+
 void pglDisplay::SwapBuffers(void)
 {
     SDL_GL_SwapWindow(win);

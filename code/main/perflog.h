@@ -7,7 +7,8 @@
 //              the given time so test runs can end unattended.
 //
 //              On the Switch, "perfsync" waits for the GPU after each swap so
-//              the GPU and vsync wait shows up as swap time, and "perfsample"
+//              the GPU and vsync wait shows up as swap time, "perfnovsync"
+//              turns off vsync to show how fast frames can go, and "perfsample"
 //              records where the main thread spends its time (written to
 //              sdmc:/switch/simpsons/perf_samples.bin on autoexit).
 //=============================================================================

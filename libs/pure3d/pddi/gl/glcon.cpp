@@ -195,12 +195,14 @@ void pglStateCache::SwapInterval(int interval)
     SDL_GL_SetSwapInterval(interval);
 }
 
+extern bool g_pddiNoVSync;
+
 // frame synchronisation
 void pglContext::BeginFrame()
 {
     pddiBaseContext::BeginFrame();
 
-    stateCache.SwapInterval(display->GetForceVSync() ? 1 : 0);
+    stateCache.SwapInterval(display->GetForceVSync() && !g_pddiNoVSync ? 1 : 0);
 
     // Create the GL objects for some of the data loaded since the last frame,
     // within a time budget, so it isn't all done when it first appears
