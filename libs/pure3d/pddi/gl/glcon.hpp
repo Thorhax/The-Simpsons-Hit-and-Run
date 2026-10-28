@@ -183,6 +183,13 @@ public:
     void SetMemImageParam(unsigned param, unsigned value) { /**/ }
 
     void Display(void);
+    void Upload(void);
+
+    // Like textures, the GL buffers are created on first use; queue them when
+    // their data is set and create a few at the start of every frame instead.
+    // Returns false once the deadline (an SDL performance counter) has passed.
+    static void InitUploadQueue(void);
+    static bool UploadQueued(unsigned long long deadline);
 
 protected:
     friend class pglPrimBufferStream;
@@ -211,6 +218,9 @@ protected:
     GLuint indexBuffer;
 
     unsigned mem;
+    bool queued;    // in the upload queue
+
+    void Enqueue(void);
 };
     
 #endif

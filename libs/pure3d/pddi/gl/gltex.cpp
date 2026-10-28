@@ -12,6 +12,14 @@
 #include <radmemory.hpp>
 
 #include <microprofile.h>
+#include <SDL.h>
+#include <deque>
+#include <algorithm>
+
+// Textures waiting to be uploaded. Filled on the loading thread (Unlock),
+// emptied on the render thread, so guarded by a mutex.
+static SDL_mutex* sUploadMutex = NULL;
+static std::deque<pglTexture*> sUploadQueue;
 
 static inline GLenum PickPixelFormat(pddiPixelFormat format)
 {
@@ -111,94 +119,7 @@ void pglTexture::SetGLState(void)
     context->stateCache.Enable(pglStateCache::CAP_TEXTURE_2D, true);
     if(!valid)
     {
-        glDeleteTextures(1, &gltexture);
-        glGenTextures(1,&gltexture);
-        glBindTexture(GL_TEXTURE_2D, gltexture);
-        samplerMag = samplerMin = samplerWrap = -1;
-
-//      if(nMipMap == 0)
-        if (type == PDDI_TEXTYPE_DXT1 || type == PDDI_TEXTYPE_DXT3 || type == PDDI_TEXTYPE_DXT5)
-        {
-#if defined(RAD_GLES)
-            unsigned char* image = new unsigned char[xSize * ySize * 4];
-            unsigned int blocksize = lock.format == PDDI_PIXEL_DXT1 ? 8 : 16;
-            if (type == PDDI_TEXTYPE_DXT1)
-                BlockDecompressImageBC1(xSize, ySize, (const uint8_t*)bits[0], image);
-            else if (type == PDDI_TEXTYPE_DXT3)
-                BlockDecompressImageBC2(xSize, ySize, (const uint8_t*)bits[0], image);
-            else if( type == PDDI_TEXTYPE_DXT5)
-                BlockDecompressImageBC3(xSize, ySize, (const uint8_t*)bits[0], image);
-            glTexImage2D(GL_TEXTURE_2D, 0, PickPixelFormat(lock.format), xSize,
-                ySize, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                image);
-            delete [] image;
-#else
-            unsigned int blocksize = lock.format == PDDI_PIXEL_DXT1 ? 8 : 16;
-            GLenum internalFormat = lock.format == PDDI_PIXEL_DXT5 ? GL_COMPRESSED_RGBA_S3TC_DXT5_EXT :
-                lock.format == PDDI_PIXEL_DXT3 ? GL_COMPRESSED_RGBA_S3TC_DXT3_EXT : GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
-            glCompressedTexImage2D(GL_TEXTURE_2D, 0, internalFormat, xSize,
-                ySize, 0, ceil(xSize/4.0)*ceil(ySize/4.0)*blocksize, (GLvoid*)bits[0]);
-#endif
-        }
-#ifdef RAD_VITAGL
-        else if (type == PDDI_TEXTYPE_YUV)
-        {
-            glCompressedTexImage2D(GL_TEXTURE_2D, 0, VGL_YUV420P_BT601, xSize, ySize, 0, (xSize * ySize * 3) / 2, (GLvoid*)bits[0]);
-        }
-#endif
-        else
-        {
-            glTexImage2D(GL_TEXTURE_2D, 0, PickPixelFormat(lock.format), xSize,
-                ySize, 0, lock.native ? GL_BGRA_EXT : GL_RGBA, GL_UNSIGNED_BYTE,
-                (GLvoid *)bits[0]);
-        }
-        /*
-        else
-        {
-
-            int tmpMipMap = nMipMap;
-            tmpMipMap--;
-            if(tmpMipMap < 0)
-                tmpMipMap = 0;
-
-            int i = 0;
-            int width = xSize;
-            int height = ySize;
-            bool bottomed = false;
-            bool done = false;
-
-            while(!done)
-            {
-                char* data = bits[i];
-                if(i > tmpMipMap)
-                    data = bits[tmpMipMap];
-
-                glTexImage2D(GL_TEXTURE_2D, i, GL_RGBA8, xSize >> i,
-                    ySize >> i, 0, lock.native ? GL_BGRA_EXT : GL_RGBA, GL_UNSIGNED_BYTE,
-                    (GLvoid *)data);
-
-                done = (width == 1) || (height == 1);
-
-                width >>= 1;
-                if(width < 1) 
-                {
-                    width = 1;
-                    bottomed = true;
-                }
-
-                height >>= 1;
-                if(height < 1) 
-                {
-                    height = 1;
-                    bottomed = true;
-                }
-
-                i++;
-            }
-        }
-        */
-
-        valid = true;
+        Upload();
     }
     else
     {
@@ -210,6 +131,105 @@ void pglTexture::SetGLState(void)
     float fpriority = float(priority) / 31.0f;
     glPrioritizeTextures(1, &gltexture, &fpriority);
 #endif
+}
+
+// Sends the texture to the GPU, leaving it bound
+void pglTexture::Upload(void)
+{
+    if(context->contextID != contextID)
+    {
+        contextID = context->contextID;
+        gltexture = 0;
+    }
+
+    glDeleteTextures(1, &gltexture);
+    glGenTextures(1,&gltexture);
+    glBindTexture(GL_TEXTURE_2D, gltexture);
+    samplerMag = samplerMin = samplerWrap = -1;
+
+//      if(nMipMap == 0)
+    if (type == PDDI_TEXTYPE_DXT1 || type == PDDI_TEXTYPE_DXT3 || type == PDDI_TEXTYPE_DXT5)
+    {
+#if defined(RAD_GLES)
+        unsigned char* image = new unsigned char[xSize * ySize * 4];
+        unsigned int blocksize = lock.format == PDDI_PIXEL_DXT1 ? 8 : 16;
+        if (type == PDDI_TEXTYPE_DXT1)
+            BlockDecompressImageBC1(xSize, ySize, (const uint8_t*)bits[0], image);
+        else if (type == PDDI_TEXTYPE_DXT3)
+            BlockDecompressImageBC2(xSize, ySize, (const uint8_t*)bits[0], image);
+        else if( type == PDDI_TEXTYPE_DXT5)
+            BlockDecompressImageBC3(xSize, ySize, (const uint8_t*)bits[0], image);
+        glTexImage2D(GL_TEXTURE_2D, 0, PickPixelFormat(lock.format), xSize,
+            ySize, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+            image);
+        delete [] image;
+#else
+        unsigned int blocksize = lock.format == PDDI_PIXEL_DXT1 ? 8 : 16;
+        GLenum internalFormat = lock.format == PDDI_PIXEL_DXT5 ? GL_COMPRESSED_RGBA_S3TC_DXT5_EXT :
+            lock.format == PDDI_PIXEL_DXT3 ? GL_COMPRESSED_RGBA_S3TC_DXT3_EXT : GL_COMPRESSED_RGBA_S3TC_DXT1_EXT;
+        glCompressedTexImage2D(GL_TEXTURE_2D, 0, internalFormat, xSize,
+            ySize, 0, ceil(xSize/4.0)*ceil(ySize/4.0)*blocksize, (GLvoid*)bits[0]);
+#endif
+    }
+#ifdef RAD_VITAGL
+    else if (type == PDDI_TEXTYPE_YUV)
+    {
+        glCompressedTexImage2D(GL_TEXTURE_2D, 0, VGL_YUV420P_BT601, xSize, ySize, 0, (xSize * ySize * 3) / 2, (GLvoid*)bits[0]);
+    }
+#endif
+    else
+    {
+        glTexImage2D(GL_TEXTURE_2D, 0, PickPixelFormat(lock.format), xSize,
+            ySize, 0, lock.native ? GL_BGRA_EXT : GL_RGBA, GL_UNSIGNED_BYTE,
+            (GLvoid *)bits[0]);
+    }
+    /*
+    else
+    {
+
+        int tmpMipMap = nMipMap;
+        tmpMipMap--;
+        if(tmpMipMap < 0)
+            tmpMipMap = 0;
+
+        int i = 0;
+        int width = xSize;
+        int height = ySize;
+        bool bottomed = false;
+        bool done = false;
+
+        while(!done)
+        {
+            char* data = bits[i];
+            if(i > tmpMipMap)
+                data = bits[tmpMipMap];
+
+            glTexImage2D(GL_TEXTURE_2D, i, GL_RGBA8, xSize >> i,
+                ySize >> i, 0, lock.native ? GL_BGRA_EXT : GL_RGBA, GL_UNSIGNED_BYTE,
+                (GLvoid *)data);
+
+            done = (width == 1) || (height == 1);
+
+            width >>= 1;
+            if(width < 1) 
+            {
+                width = 1;
+                bottomed = true;
+            }
+
+            height >>= 1;
+            if(height < 1) 
+            {
+                height = 1;
+                bottomed = true;
+            }
+
+            i++;
+        }
+    }
+    */
+
+    valid = true;
 }
 
 void pglTexture::SetSampler(int magFilter, int minFilter, int wrap)
@@ -341,10 +361,19 @@ pglTexture::pglTexture(pglContext* c)
     priority = 15;
     valid = false;
     samplerMag = samplerMin = samplerWrap = -1;
+    queued = false;
 }
 
 pglTexture::~pglTexture()
 {
+    if(sUploadMutex)
+    {
+        SDL_LockMutex(sUploadMutex);
+        if(queued)
+            sUploadQueue.erase(std::find(sUploadQueue.begin(), sUploadQueue.end(), this));
+        SDL_UnlockMutex(sUploadMutex);
+    }
+
     if(gltexture) glDeleteTextures(1, &gltexture);
 
     if(bits)
@@ -417,6 +446,51 @@ pddiLockInfo* pglTexture::Lock(int mipMap, pddiRect* rect)
 void pglTexture::Unlock(int mipLevel)
 {
     valid = false;
+
+    if(sUploadMutex)
+    {
+        SDL_LockMutex(sUploadMutex);
+        if(!queued)
+        {
+            queued = true;
+            sUploadQueue.push_back(this);
+        }
+        SDL_UnlockMutex(sUploadMutex);
+    }
+}
+
+void pglTexture::InitUploadQueue(void)
+{
+    if(!sUploadMutex)
+        sUploadMutex = SDL_CreateMutex();
+}
+
+bool pglTexture::UploadQueued(unsigned long long deadline)
+{
+    if(!sUploadMutex)
+        return true;
+
+    bool inTime = true;
+    // Holding the lock keeps the loading thread from destroying a texture
+    // while it's uploaded; it only waits when it queues or frees one
+    SDL_LockMutex(sUploadMutex);
+    while(!sUploadQueue.empty())
+    {
+        pglTexture* tex = sUploadQueue.front();
+        sUploadQueue.pop_front();
+        tex->queued = false;
+        if(!tex->valid)
+            tex->Upload();
+
+        // Always upload at least one, so the queue keeps moving
+        if(SDL_GetPerformanceCounter() >= deadline)
+        {
+            inTime = false;
+            break;
+        }
+    }
+    SDL_UnlockMutex(sUploadMutex);
+    return inTime;
 }
 
 void pglTexture::SetPriority(int p)

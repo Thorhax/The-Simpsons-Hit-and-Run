@@ -42,6 +42,14 @@ public:
 
     // gl specific stuff
     void SetGLState(void);
+    void Upload(void);
+
+    // Textures are uploaded to the GPU on first use, so many new ones becoming
+    // visible at once made long frames. Filled textures are queued instead and
+    // a few are uploaded at the start of every frame. Returns false once the
+    // deadline (an SDL performance counter) has passed.
+    static void InitUploadQueue(void);
+    static bool UploadQueued(unsigned long long deadline);
     // Filtering and wrapping of the bound texture, skipped when unchanged
     void SetSampler(int magFilter, int minFilter, int wrap);
 
@@ -58,6 +66,7 @@ protected:
     unsigned int gltexture;
     int priority;
     int samplerMag, samplerMin, samplerWrap;
+    bool queued;    // in the upload queue
 
     pddiLockInfo lock;
 

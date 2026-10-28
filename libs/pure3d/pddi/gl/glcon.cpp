@@ -13,6 +13,8 @@
 #include <math.h>
 #include <string.h>
 #include <SDL.h>
+#include <algorithm>
+#include <deque>
 
 #include <microprofile.h>
 
@@ -77,6 +79,8 @@ pglContext::pglContext(pglDevice* dev, pglDisplay* disp) : pddiBaseContext((pddi
 
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTexSize);
     stateCache.Invalidate();
+    pglTexture::InitUploadQueue();
+    pglPrimBuffer::InitUploadQueue();
     DefaultState();
     contextID = 0;
 
@@ -197,6 +201,12 @@ void pglContext::BeginFrame()
     pddiBaseContext::BeginFrame();
 
     stateCache.SwapInterval(display->GetForceVSync() ? 1 : 0);
+
+    // Create the GL objects for some of the data loaded since the last frame,
+    // within a time budget, so it isn't all done when it first appears
+    unsigned long long deadline = SDL_GetPerformanceCounter() + SDL_GetPerformanceFrequency() * 2 / 1000;
+    if(pglPrimBuffer::UploadQueued(deadline))
+        pglTexture::UploadQueued(deadline);
 
     if(display->HasReset())
     {
@@ -718,6 +728,10 @@ public:
 
 };
 
+// Buffers waiting for their GL buffers, filled on the loading thread
+static SDL_mutex* sBufferMutex = NULL;
+static std::deque<pglPrimBuffer*> sBufferQueue;
+
 pglPrimBuffer::pglPrimBuffer(pglContext* c, pddiPrimType type, unsigned vertexFormat, int nVertex, int nIndex) : context(c)
 {
     stream = new pglPrimBufferStream(this);
@@ -730,6 +744,7 @@ pglPrimBuffer::pglPrimBuffer(pglContext* c, pddiPrimType type, unsigned vertexFo
 
     valid = false;
     vertexBuffer = indexBuffer = 0;
+    queued = false;
 
     primType = type;
     vertexType = vertexFormat;
@@ -772,6 +787,20 @@ pglPrimBuffer::pglPrimBuffer(pglContext* c, pddiPrimType type, unsigned vertexFo
 
 pglPrimBuffer::~pglPrimBuffer()
 {
+    if(sBufferMutex)
+    {
+        SDL_LockMutex(sBufferMutex);
+        if(queued)
+            sBufferQueue.erase(std::find(sBufferQueue.begin(), sBufferQueue.end(), this));
+        SDL_UnlockMutex(sBufferMutex);
+    }
+
+    // The buffers used to be leaked, using up GPU memory as levels streamed in and out
+    if(vertexBuffer)
+        glDeleteBuffers(1, &vertexBuffer);
+    if(indexBuffer)
+        glDeleteBuffers(1, &indexBuffer);
+
     delete stream;
 
     delete [] strips;
@@ -791,6 +820,50 @@ pddiPrimBufferStream* pglPrimBuffer::Lock()
     return stream;
 }
 
+void pglPrimBuffer::InitUploadQueue(void)
+{
+    if(!sBufferMutex)
+        sBufferMutex = SDL_CreateMutex();
+}
+
+void pglPrimBuffer::Enqueue(void)
+{
+    if(!sBufferMutex)
+        return;
+    SDL_LockMutex(sBufferMutex);
+    if(!queued)
+    {
+        queued = true;
+        sBufferQueue.push_back(this);
+    }
+    SDL_UnlockMutex(sBufferMutex);
+}
+
+bool pglPrimBuffer::UploadQueued(unsigned long long deadline)
+{
+    if(!sBufferMutex)
+        return true;
+
+    bool inTime = true;
+    SDL_LockMutex(sBufferMutex);
+    while(!sBufferQueue.empty())
+    {
+        pglPrimBuffer* buffer = sBufferQueue.front();
+        sBufferQueue.pop_front();
+        buffer->queued = false;
+        if(!buffer->valid)
+            buffer->Upload();
+
+        if(SDL_GetPerformanceCounter() >= deadline)
+        {
+            inTime = false;
+            break;
+        }
+    }
+    SDL_UnlockMutex(sBufferMutex);
+    return inTime;
+}
+
 void pglPrimBuffer::Unlock(pddiPrimBufferStream* stream)
 {
     if(coord)
@@ -806,6 +879,7 @@ void pglPrimBuffer::Unlock(pddiPrimBufferStream* stream)
         colour -= total * 4;
 
     valid = false;
+    Enqueue();
 }
 
 unsigned char* pglPrimBuffer::LockIndexBuffer()
@@ -824,12 +898,12 @@ void pglPrimBuffer::SetIndices(unsigned short* i, int count)
     PDDIASSERT(count <= (int)indexCount);
     memcpy(indices, i, count * sizeof(unsigned short));
     valid = false;
+    Enqueue();
 }
 
-void pglPrimBuffer::Display(void)
+// Creates the GL buffers if needed and uploads the data, leaving them bound
+void pglPrimBuffer::Upload(void)
 {
-    MICROPROFILE_SCOPEI("PDDI", "pglPrimBuffer::Display", MP_RED);
-
     if(!vertexBuffer)
     {
         glGenBuffers(1, &vertexBuffer);
@@ -840,17 +914,65 @@ void pglPrimBuffer::Display(void)
     {
         glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
     }
-    
+
     GLintptr offset = 0;
-    if( !valid )
-        glBufferSubData( GL_ARRAY_BUFFER, offset, allocated*12, coord );
+    glBufferSubData(GL_ARRAY_BUFFER, offset, allocated*12, coord);
+    offset += allocated*12;
+    if(vertexType & PDDI_V_NORMAL)
+    {
+        glBufferSubData(GL_ARRAY_BUFFER, offset, allocated*12, normal);
+        offset += allocated*12;
+    }
+    if(vertexType & PDDI_V_COLOUR)
+    {
+        glBufferSubData(GL_ARRAY_BUFFER, offset, allocated*4, colour);
+        offset += allocated*4;
+    }
+    if(vertexType & 0xf)
+    {
+        glBufferSubData(GL_ARRAY_BUFFER, offset, allocated*8, uv);
+        offset += allocated*8;
+    }
+
+    if(indexCount && indices)
+    {
+        if(!indexBuffer)
+        {
+            glGenBuffers(1, &indexBuffer);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexCount*sizeof(unsigned short), NULL, GL_DYNAMIC_DRAW);
+        }
+        else
+        {
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
+        }
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, indexCount*sizeof(unsigned short), indices);
+    }
+
+    valid = true;
+}
+
+void pglPrimBuffer::Display(void)
+{
+    MICROPROFILE_SCOPEI("PDDI", "pglPrimBuffer::Display", MP_RED);
+
+    if(!valid || !vertexBuffer)
+    {
+        Upload();
+    }
+    else
+    {
+        glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
+        if(indexCount && indices)
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBuffer);
+    }
+
+    GLintptr offset = 0;
     glVertexPointer(3,GL_FLOAT,0,(void*)offset);
     offset += allocated*12;
 
     if(vertexType & PDDI_V_NORMAL)
     {
-        if(!valid)
-            glBufferSubData(GL_ARRAY_BUFFER,offset,allocated*12,normal);
         glEnableClientState(GL_NORMAL_ARRAY);
         glNormalPointer(GL_FLOAT,0,(void*)offset);
         offset += allocated*12;
@@ -862,8 +984,6 @@ void pglPrimBuffer::Display(void)
 
     if(vertexType & PDDI_V_COLOUR)
     {
-        if(!valid)
-            glBufferSubData(GL_ARRAY_BUFFER,offset,allocated*4,colour);
         glEnableClientState(GL_COLOR_ARRAY);
         glColorPointer(4,GL_UNSIGNED_BYTE,0,(void*)offset);
         offset += allocated*4;
@@ -875,8 +995,6 @@ void pglPrimBuffer::Display(void)
 
     if(vertexType & 0xf)
     {
-        if(!valid)
-            glBufferSubData(GL_ARRAY_BUFFER,offset,allocated*8,uv);
         glEnableClientState(GL_TEXTURE_COORD_ARRAY);
         glTexCoordPointer(2,GL_FLOAT,0,(void*)offset);
         offset += allocated*8;
@@ -888,19 +1006,6 @@ void pglPrimBuffer::Display(void)
 
     if(indexCount && indices)
     {
-        if(!indexBuffer)
-        {
-            glGenBuffers(1, &indexBuffer);
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,indexBuffer);
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER,indexCount*sizeof(unsigned short),NULL,GL_DYNAMIC_DRAW);
-        }
-        else
-        {
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,indexBuffer);
-        }
-
-        if(!valid)
-            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER,0,indexCount*sizeof(unsigned short),indices);
         glDrawElements(primTypeTable[primType],indexCount,GL_UNSIGNED_SHORT,0);
     }
     else
@@ -908,8 +1013,6 @@ void pglPrimBuffer::Display(void)
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER,0);
         glDrawArrays(primTypeTable[primType], 0, total);
     }
-
-    valid = true;
 }
 
 /*
